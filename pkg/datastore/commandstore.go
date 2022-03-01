@@ -16,6 +16,8 @@ package datastore
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/pipe-cd/pipecd/pkg/model"
@@ -51,6 +53,66 @@ func (c *commandCollection) GetUpdatableShard() (Shard, error) {
 	default:
 		return "", ErrUnsupported
 	}
+}
+
+func (c *commandCollection) Decode(e interface{}, parts ...[]byte) error {
+	if len(parts) != len(c.ListInUsedShards()) {
+		return fmt.Errorf("failed while decode Command object: shards count not matched")
+	}
+
+	cmd, ok := e.(*model.Command)
+	if !ok {
+		return fmt.Errorf("failed while decode Command object: type not matched")
+	}
+
+	var (
+		status    model.CommandStatus
+		updatedAt int64
+	)
+	for _, p := range parts {
+		if err := json.Unmarshal(p, &cmd); err != nil {
+			return err
+		}
+		if updatedAt < cmd.UpdatedAt {
+			updatedAt = cmd.UpdatedAt
+		}
+		if status < cmd.Status {
+			status = cmd.Status
+		}
+	}
+
+	cmd.Status = status
+	cmd.UpdatedAt = updatedAt
+	return nil
+}
+
+func (c *commandCollection) Encode(e interface{}) (map[Shard][]byte, error) {
+	const errFmt = "failed while encode Command object: %s"
+
+	me, ok := e.(*model.Command)
+	if !ok {
+		return nil, fmt.Errorf(errFmt, "type not matched")
+	}
+
+	agentShardStruct := me
+	adata, err := json.Marshal(&agentShardStruct)
+	if err != nil {
+		return nil, fmt.Errorf(errFmt, "unable to marshal entity data")
+	}
+
+	opsShardStruct := model.Command{
+		Status:    me.Status,
+		UpdatedAt: me.UpdatedAt,
+	}
+	odata, err := json.Marshal(&opsShardStruct)
+	if err != nil {
+		return nil, fmt.Errorf(errFmt, "unable to marshal entity data")
+	}
+
+	return map[Shard][]byte{
+		AgentShard: adata,
+		OpsShard:   odata,
+	}, nil
 }
 
 type CommandStore interface {
